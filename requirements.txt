@@ -1,4 +1,4 @@
 streamlit
-crewai
+crewai==1.9.3
 pypdf
 litellm
