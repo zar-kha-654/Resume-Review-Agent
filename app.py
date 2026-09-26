@@ -101,9 +101,9 @@ def create_agent(llm):
 
         llm=llm,
         verbose=False,
-        allow_delegation=False
+        allow_delegation=False,
+        cache=False
     )
-
 
 # -----------------------------
 # Create task
