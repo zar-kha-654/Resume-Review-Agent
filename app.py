@@ -5,9 +5,11 @@ from pypdf import PdfReader
 from crewai import Agent, Task, Crew, LLM
 
 
-# ============================================================
-# PAGE CONFIG
-# ============================================================
+# -----------------------------
+# Configuration
+# -----------------------------
+
+MODEL_NAME = "groq/openai/gpt-oss-120b"
 
 st.set_page_config(
     page_title="AI Resume Reviewer",
@@ -16,76 +18,55 @@ st.set_page_config(
 )
 
 
-# ============================================================
-# SETTINGS
-# ============================================================
-
-MODEL_NAME = "groq/openai/gpt-oss-120b"
-
-
-# ============================================================
-# PDF TEXT EXTRACTION
-# ============================================================
+# -----------------------------
+# PDF extraction
+# -----------------------------
 
 def extract_pdf_text(uploaded_file):
-    """Extract readable text from an uploaded PDF."""
-
     try:
         reader = PdfReader(uploaded_file)
 
-        if not reader.pages:
-            raise ValueError("The PDF does not contain any pages.")
+        if len(reader.pages) == 0:
+            return None, "The PDF contains no pages."
 
-        extracted_text = []
+        text_parts = []
 
         for page in reader.pages:
-            text = page.extract_text()
+            page_text = page.extract_text()
 
-            if text:
-                extracted_text.append(text)
+            if page_text:
+                text_parts.append(page_text)
 
-        final_text = "\n".join(extracted_text).strip()
+        text = "\n".join(text_parts).strip()
 
-        if not final_text:
-            raise ValueError(
+        if not text:
+            return None, (
                 "No readable text was found in this PDF. "
-                "The PDF may be scanned or image-based."
+                "It may be a scanned/image-based PDF."
             )
 
-        return final_text
+        return text, None
 
     except Exception as e:
-        raise ValueError(
-            f"Could not extract text from PDF: {str(e)}"
-        )
+        return None, f"Could not read the PDF: {e}"
 
 
-# ============================================================
-# GET GROQ API KEY FROM STREAMLIT SECRETS
-# ============================================================
+# -----------------------------
+# Get API key
+# -----------------------------
 
-def get_groq_api_key():
-    """Get the Groq API key from Streamlit Secrets."""
-
+def get_api_key():
     try:
-        api_key = st.secrets["GROQ_API_KEY"]
-
-        if not api_key:
-            return None
-
-        return api_key
-
+        return st.secrets["GROQ_API_KEY"]
     except Exception:
         return None
 
 
-# ============================================================
-# CREATE GROQ LLM
-# ============================================================
+# -----------------------------
+# Create LLM
+# -----------------------------
 
 def create_llm(api_key):
-    """Create the CrewAI LLM using Groq."""
-
     return LLM(
         model=MODEL_NAME,
         api_key=api_key,
@@ -94,148 +75,115 @@ def create_llm(api_key):
     )
 
 
-# ============================================================
-# CREATE RESUME REVIEW AGENT
-# ============================================================
+# -----------------------------
+# Create agent
+# -----------------------------
 
 def create_agent(llm):
-    """Create the single CrewAI resume reviewer."""
-
     return Agent(
         role="Professional Resume Reviewer",
 
         goal=(
-            "Analyze a candidate's resume against a target job "
-            "description and provide an accurate, evidence-based "
-            "and actionable review without inventing qualifications."
+            "Compare a candidate's resume with a target job "
+            "description and provide accurate, evidence-based "
+            "and actionable feedback."
         ),
 
         backstory=(
-            "You are an experienced professional resume reviewer "
-            "and career-document analyst. You carefully compare "
-            "resumes with job descriptions. You only consider "
-            "qualifications that are explicitly stated or clearly "
-            "demonstrated in the resume. You never assume that a "
-            "candidate has a skill, certification, degree, job "
-            "experience, or achievement that is not supported by "
-            "the resume."
+            "You are an experienced resume reviewer. "
+            "You carefully compare resumes with job descriptions. "
+            "You never invent skills, qualifications, experience, "
+            "certifications, degrees, projects, or achievements. "
+            "If something is not mentioned in the resume, you say "
+            "that it is not mentioned rather than assuming the "
+            "candidate does not have it."
         ),
 
         llm=llm,
-
         verbose=False,
-
         allow_delegation=False
     )
 
 
-# ============================================================
-# CREATE REVIEW TASK
-# ============================================================
+# -----------------------------
+# Create task
+# -----------------------------
 
-def create_task(agent, resume_text, job_description):
-    """Create the resume review task."""
+def create_review_task(agent, resume, job_description):
 
     task_description = f"""
-You are reviewing a candidate's resume for a target job.
+Review the following candidate resume against the target job.
 
-========================
-CANDIDATE RESUME
-========================
+================ RESUME ================
 
-{resume_text}
+{resume}
 
-
-========================
-TARGET JOB DESCRIPTION
-========================
+================ JOB DESCRIPTION ================
 
 {job_description}
 
+================ RULES ================
 
-========================
-IMPORTANT RULES
-========================
+1. Never fabricate qualifications.
 
-1. Do NOT fabricate qualifications.
+2. Only say the candidate has a skill when the resume explicitly
+mentions or clearly demonstrates that skill.
 
-2. Only claim that the candidate has a skill, technology,
-certification, degree, achievement, or experience when it is
-explicitly supported by the resume.
-
-3. If something is required by the job description but is not
-mentioned in the resume, say:
-
+3. If a job requirement is not found in the resume, write:
 "Not mentioned in the resume."
 
-4. Do not interpret silence as possession.
+4. Do not say that the candidate lacks a skill simply because
+the skill is not mentioned.
 
-5. Do not claim that the candidate lacks a skill merely because
-the skill is not mentioned. Say that it was not mentioned.
+5. Do not invent years of experience.
 
-6. Do not invent years of experience.
+6. Do not invent employers, projects, degrees, certifications,
+technologies, achievements, or responsibilities.
 
-7. Do not invent projects, employers, degrees, certifications,
-achievements, or technologies.
+7. Recommendations must be truthful and actionable.
 
-8. Do not rewrite the candidate's experience as if they had
-experience they did not state.
+8. If suggesting a keyword, tell the candidate to add it only
+if they genuinely have that skill or experience.
 
-9. Base important conclusions on evidence from the supplied
-resume and job description.
-
-10. Recommendations should be practical and actionable.
-
-11. Suggested keywords should only be recommended if the
-candidate genuinely has the corresponding skill or experience.
-
-========================
-OUTPUT FORMAT
-========================
+================ REPORT FORMAT ================
 
 # Resume Match Review
 
 ## 1. Overall Match
 
-Give a short summary explaining how closely the resume aligns
-with the target job.
+Give a short evidence-based summary of how the resume aligns
+with the job description.
 
-Do not make unsupported claims about the candidate's ability.
+## 2. Matching Requirements
 
-## 2. Requirements Found in the Resume
+List important job requirements that are supported by the resume.
 
-List important job requirements that are explicitly supported
-by the resume.
-
-For each item include:
+For each one provide:
 
 - Requirement
 - Resume evidence
 - Match status
 
-Use:
-
-- Strong match
-- Partial match
+Use "Strong match" or "Partial match".
 
 ## 3. Requirements Not Mentioned
 
-List important job requirements that are not found in the resume.
+List important job requirements that were not found in the resume.
 
-For each item include:
+For each one provide:
 
-- Job requirement
-- Resume status: Not mentioned in the resume
+- Requirement
+- Status: Not mentioned in the resume
 - Why it matters
 
 Do not claim that the candidate lacks the skill.
 
 ## 4. Experience Alignment
 
-Explain how the candidate's stated work experience, projects,
-internships, education, or other experience relates to the job.
+Explain how the candidate's stated experience, projects,
+education, or internships relate to the target role.
 
-Only use information actually present in the resume.
+Only use information from the resume.
 
 ## 5. Resume Problems
 
@@ -245,7 +193,7 @@ Identify issues such as:
 - weak descriptions
 - missing measurable results
 - irrelevant information
-- unclear technical skills
+- unclear skills
 - poor organization
 - missing relevant keywords
 
@@ -255,57 +203,53 @@ Do not invent achievements.
 
 Give specific improvements the candidate can make.
 
-When suggesting stronger wording, clearly indicate that the
-candidate should only use it if it is truthful.
+Do not create fake achievements or experience.
 
 ## 7. Suggested Keywords
 
 List relevant keywords from the job description that the
-candidate could consider adding ONLY if they genuinely have
-those skills or experience.
+candidate should consider adding only if they genuinely
+possess those skills.
 
-## 8. Interview Preparation Areas
+## 8. Interview Preparation
 
-List topics the candidate should prepare for based on the
-overlap between the resume and job description.
+List topics the candidate should prepare based on the
+resume and job description.
 
 ## 9. Final Action Plan
 
-Give 5 to 8 practical next steps in priority order.
+Give 5 to 8 practical next steps.
 
-Keep everything evidence-based.
+Keep the entire review factual and evidence-based.
 """
 
     return Task(
         description=task_description,
 
         expected_output=(
-            "A structured resume review containing overall "
-            "alignment, supported requirements, requirements "
-            "not mentioned, experience alignment, resume "
-            "problems, actionable improvements, suggested "
-            "keywords, interview preparation areas, and "
-            "a final action plan."
+            "A structured resume review with overall match, "
+            "matching requirements, requirements not mentioned, "
+            "experience alignment, resume problems, improvements, "
+            "keywords, interview preparation, and action plan."
         ),
 
         agent=agent
     )
 
 
-# ============================================================
-# RUN RESUME REVIEW
-# ============================================================
+# -----------------------------
+# Run CrewAI
+# -----------------------------
 
-def run_resume_review(resume_text, job_description, api_key):
-    """Run the CrewAI resume review with error handling."""
+def review_resume(resume, job_description, api_key):
 
     llm = create_llm(api_key)
 
     agent = create_agent(llm)
 
-    task = create_task(
+    task = create_review_task(
         agent,
-        resume_text,
+        resume,
         job_description
     )
 
@@ -315,124 +259,69 @@ def run_resume_review(resume_text, job_description, api_key):
         verbose=False
     )
 
-    max_attempts = 3
-
-    for attempt in range(max_attempts):
+    for attempt in range(3):
 
         try:
-
             result = crew.kickoff()
 
-            if result is None:
-                raise RuntimeError(
-                    "The AI returned an empty response."
-                )
+            if result:
+                return str(result)
 
-            return str(result)
+            raise RuntimeError(
+                "The AI returned an empty response."
+            )
 
         except Exception as e:
 
-            error_text = str(e).lower()
-
-            # --------------------------------------------
-            # RATE LIMIT
-            # --------------------------------------------
+            error = str(e).lower()
 
             if (
-                "429" in error_text
-                or "rate limit" in error_text
-                or "ratelimit" in error_text
+                "429" in error
+                or "rate limit" in error
+                or "ratelimit" in error
             ):
-
-                if attempt < max_attempts - 1:
-
-                    wait_time = 2 ** attempt
-
-                    time.sleep(wait_time)
-
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
                     continue
 
                 raise RuntimeError(
                     "Groq rate limit reached. "
-                    "Please wait a little and try again."
+                    "Please wait and try again."
                 )
 
-            # --------------------------------------------
-            # API KEY / AUTHENTICATION
-            # --------------------------------------------
-
             if (
-                "401" in error_text
-                or "authentication" in error_text
-                or "unauthorized" in error_text
-                or "api key" in error_text
+                "401" in error
+                or "unauthorized" in error
+                or "authentication" in error
+                or "api key" in error
             ):
-
                 raise RuntimeError(
                     "Groq API authentication failed. "
-                    "Please check your GROQ_API_KEY in "
-                    "Streamlit Secrets."
+                    "Check GROQ_API_KEY in Streamlit Secrets."
                 )
 
-            # --------------------------------------------
-            # PERMISSION
-            # --------------------------------------------
-
-            if (
-                "403" in error_text
-                or "permission" in error_text
-                or "model_permission" in error_text
-            ):
-
+            if "403" in error or "permission" in error:
                 raise RuntimeError(
-                    "The selected Groq model is not available "
-                    "for this API project."
+                    "The Groq model is not available for this API key."
                 )
 
-            # --------------------------------------------
-            # MODEL ERROR
-            # --------------------------------------------
-
             if (
-                "model not found" in error_text
-                or "does not exist" in error_text
-                or "decommissioned" in error_text
+                "timeout" in error
+                or "connection" in error
+                or "503" in error
+                or "502" in error
             ):
-
-                raise RuntimeError(
-                    f"The configured model '{MODEL_NAME}' "
-                    "is unavailable."
-                )
-
-            # --------------------------------------------
-            # TEMPORARY CONNECTION ERROR
-            # --------------------------------------------
-
-            if (
-                "connection" in error_text
-                or "timeout" in error_text
-                or "temporarily unavailable" in error_text
-                or "503" in error_text
-                or "502" in error_text
-            ):
-
-                if attempt < max_attempts - 1:
-
+                if attempt < 2:
                     time.sleep(2 ** attempt)
-
                     continue
 
                 raise RuntimeError(
-                    "The Groq service could not be reached. "
+                    "The Groq service is temporarily unavailable. "
                     "Please try again."
                 )
 
-            # --------------------------------------------
-            # OTHER ERROR
-            # --------------------------------------------
-
             raise RuntimeError(
-                f"The AI review failed: {str(e)}"
+                f"The resume review failed: {e}"
             )
 
     raise RuntimeError(
@@ -441,30 +330,174 @@ def run_resume_review(resume_text, job_description, api_key):
 
 
 # ============================================================
-# STREAMLIT USER INTERFACE
+# USER INTERFACE
 # ============================================================
 
 st.title("📄 AI Resume Reviewer")
 
 st.write(
     "Compare a resume with a target job description "
-    "using a CrewAI-powered AI reviewer."
+    "using CrewAI and Groq."
 )
 
 st.info(
-    "The reviewer only uses information provided in the "
-    "resume and does not assume unmentioned qualifications."
+    "The AI will not assume qualifications that are not "
+    "mentioned in the resume."
 )
 
 
-# ============================================================
-# RESUME INPUT
-# ============================================================
+# -----------------------------
+# Resume input
+# -----------------------------
 
 st.header("1. Candidate Resume")
 
-resume_input_method = st.radio(
-    "Choose resume input method:",
-    ["Upload PDF", "Paste Resume Text"],
-    horizontal=T
-```
+input_method = st.radio(
+    "How do you want to provide the resume?",
+    ["Upload PDF", "Paste Text"],
+    horizontal=True
+)
+
+resume_text = ""
+
+
+if input_method == "Upload PDF":
+
+    uploaded_file = st.file_uploader(
+        "Upload resume PDF",
+        type=["pdf"]
+    )
+
+    if uploaded_file is not None:
+
+        resume_text, pdf_error = extract_pdf_text(
+            uploaded_file
+        )
+
+        if pdf_error:
+            st.error(pdf_error)
+
+        else:
+            st.success("PDF successfully read.")
+
+            with st.expander("Preview resume text"):
+                st.text(resume_text[:5000])
+
+
+else:
+
+    resume_text = st.text_area(
+        "Paste resume text",
+        height=350,
+        placeholder="Paste the candidate's resume here..."
+    )
+
+
+# -----------------------------
+# Job description
+# -----------------------------
+
+st.header("2. Target Job Description")
+
+job_description = st.text_area(
+    "Paste the job description",
+    height=350,
+    placeholder="Paste the complete job description here..."
+)
+
+
+# -----------------------------
+# API key
+# -----------------------------
+
+api_key = get_api_key()
+
+if not api_key:
+    st.warning(
+        "GROQ_API_KEY is not configured in Streamlit Secrets."
+    )
+
+
+# -----------------------------
+# Review button
+# -----------------------------
+
+st.header("3. Review")
+
+if st.button(
+    "🔍 Review Resume",
+    type="primary",
+    use_container_width=True
+):
+
+    if not resume_text or not resume_text.strip():
+        st.error(
+            "Please upload a PDF or paste the resume text."
+        )
+        st.stop()
+
+    if not job_description or not job_description.strip():
+        st.error(
+            "Please paste the target job description."
+        )
+        st.stop()
+
+    if not api_key:
+        st.error(
+            "GROQ_API_KEY is missing from Streamlit Secrets."
+        )
+        st.stop()
+
+    if len(resume_text) > 100000:
+        st.error(
+            "The resume is too large. Please use a shorter resume."
+        )
+        st.stop()
+
+    if len(job_description) > 100000:
+        st.error(
+            "The job description is too large."
+        )
+        st.stop()
+
+    with st.spinner(
+        "🤖 CrewAI is reviewing the resume..."
+    ):
+
+        try:
+
+            report = review_resume(
+                resume_text,
+                job_description,
+                api_key
+            )
+
+            st.success(
+                "Resume review completed!"
+            )
+
+            st.markdown("---")
+
+            st.markdown(report)
+
+            st.download_button(
+                "⬇️ Download Review",
+                data=report,
+                file_name="resume_review.txt",
+                mime="text/plain"
+            )
+
+        except Exception as e:
+
+            st.error(str(e))
+
+
+# -----------------------------
+# Footer
+# -----------------------------
+
+st.markdown("---")
+
+st.caption(
+    "Powered by Streamlit + CrewAI + Groq"
+)
